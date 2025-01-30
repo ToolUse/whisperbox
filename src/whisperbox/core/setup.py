@@ -35,7 +35,7 @@ AI_PROVIDERS = {
     },
     "openai": {
         "description": "OpenAI's GPT models (requires API key)",
-        "default_model": "gpto",
+        "default_model": "gpt-4o",
     },
     "anthropic": {
         "description": "Anthropic's Claude models (requires API key)",
@@ -249,9 +249,7 @@ def setup_config() -> Dict[str, Any]:
     else:
         # For other providers, handle API key and model selection
         if "api" not in config:
-            config["api"] = {}
-        if selected_provider.lower() not in config["api"]:
-            config["api"][selected_provider.lower()] = {}
+            config["api"] = DEFAULT_CONFIG["api"].copy()
 
         # Get API key
         key = inquirer.secret(
@@ -260,11 +258,12 @@ def setup_config() -> Dict[str, Any]:
             invalid_message="API key cannot be empty",
         ).execute()
 
-        config["api"][selected_provider.lower()]["api_key"] = key
+        # Save API key directly
+        config["api"][selected_provider.lower()] = key
 
         # Get model name
         model = inquirer.text(
-            message=f"Enter the {selected_provider} model name, as it appears in the API documentation for that provider:",
+            message=f"Enter the {selected_provider} model name:",
             default=AI_PROVIDERS[selected_provider]["default_model"],
         ).execute()
 

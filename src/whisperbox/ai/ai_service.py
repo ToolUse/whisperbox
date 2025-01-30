@@ -1,5 +1,6 @@
-from typing import Optional, Type, TypeVar
+from typing import Optional, Type, TypeVar, Union, Any
 from anthropic import Anthropic
+from anthropic.types import ContentBlock, Message
 from groq import Groq
 import ollama
 from openai import OpenAI
@@ -11,11 +12,12 @@ import os
 T = TypeVar('T', bound=BaseModel)
 
 class AIService:
+    # These are only used as fallbacks if config.yaml doesn't specify a model
     DEFAULT_MODELS = {
-        "ollama": "llama3.1",
-        "groq": "llama-3.1-70b-versatile",
-        "anthropic": "claude-3-5-sonnet-20241022",
-        "openai": "gpt-4-0125-preview",
+        "ollama": "llama3.2",
+        "groq": "mixtral-8x7b-32768",
+        "anthropic": "claude-3-sonnet",
+        "openai": "gpt-4",
     }
 
     def __init__(self, service_type: Optional[str] = None, model: Optional[str] = None):
@@ -23,10 +25,16 @@ class AIService:
         
         Args:
             service_type: The type of AI service to use (groq, anthropic, openai, ollama)
-            model: The specific model to use. If not provided, uses the default model for the service.
+            model: The specific model to use. If not provided, uses config.yaml or default model.
         """
-        self.service_type = service_type.lower() if service_type else "ollama"
-        self.model = model if model else self.DEFAULT_MODELS[self.service_type]
+        self.service_type = service_type.lower() if service_type else config.ai.get('default_provider', "ollama")
+        
+        # First try model param, then config.yaml, then fallback to defaults
+        self.model = (
+            model or 
+            config.ai.get('default_model') or 
+            self.DEFAULT_MODELS[self.service_type]
+        )
         
         if self.service_type == "groq":
             self.client = Groq(api_key=self._get_api_key("groq"))
@@ -87,9 +95,9 @@ class AIService:
                     return self._query_groq(prompt, system_prompt, max_tokens)
                 elif self.service_type == "anthropic":
                     response = self._query_anthropic(prompt, system_prompt, max_tokens)
-                    if hasattr(response, "content") and isinstance(response.content, list):
-                        return response.content[0].text if response.content else ""
-                    return str(response)
+                    return response
+                elif self.service_type == "openai":
+                    return self._query_openai(prompt, system_prompt, max_tokens)
                 else:
                     raise ValueError(f"Unsupported service type: {self.service_type}")
             except Exception as e:
@@ -119,19 +127,35 @@ class AIService:
         return completion.choices[0].message.content
 
     def _query_anthropic(self, prompt: str, system_prompt: Optional[str] = None, max_tokens: int = 1024) -> str:
+        """Query Anthropic's Claude API."""
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
         
-        completion = self.client.messages.create(
+        response: Message = self.client.messages.create(
             model=self.model,
             max_tokens=max_tokens,
             messages=messages,
         )
-        if hasattr(completion, "content") and isinstance(completion.content, list):
-            return completion.content[0].text if completion.content else ""
-        return completion.content
+        
+        if response.content and len(response.content) > 0:
+            return response.content[0].text
+        return ""
+
+    def _query_openai(self, prompt: str, system_prompt: Optional[str] = None, max_tokens: int = 1024) -> str:
+        """Query OpenAI's API."""
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        
+        completion = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            max_tokens=max_tokens,
+        )
+        return completion.choices[0].message.content
 
     def openai_structured_output(self, system_prompt: str, user_prompt: str, data_model: Type[T]) -> T:
         """Query OpenAI with structured output using Pydantic model"""
@@ -139,25 +163,23 @@ class AIService:
             raise ValueError("Structured output is only available with OpenAI service")
             
         try:
-            completion = self.client.beta.chat.completions.parse(
-                model="gpt-4o",
+            completion = self.client.chat.completions.create(
+                model=self.model,  # Use configured model instead of hardcoded one
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                response_format=data_model,
+                response_format={"type": "json_object"},
             )
-            message = completion.choices[0].message
-            if message.parsed:
-                return message.parsed
-            else:
-                print(message.refusal)
-                return message.refusal
+            response_text = completion.choices[0].message.content
+            if response_text:
+                return data_model.parse_raw(response_text)
+            raise ValueError("Empty response from OpenAI")
         except Exception as e:
             print(f"Error in OpenAI structured output: {e}")
             raise
 
-    def query_structured(self, prompt: str, data_model: Type[T], system_prompt: Optional[str] = None) -> T:
+    def query_structured(self, prompt: str, data_model: Type[T], system_prompt: str = "") -> T:
         """Query with structured output (OpenAI only)"""
         if self.service_type != "openai":
             raise ValueError(
