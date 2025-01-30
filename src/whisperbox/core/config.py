@@ -11,6 +11,11 @@ from ..utils.utils import (
 
 DEFAULT_CONFIG = {
     "ai": {"default_provider": "ollama", "default_model": "llama3.2"},
+    "api": {
+        "openai": None,
+        "anthropic": None,
+        "groq": None,
+    },
     "audio": {
         "format": "wav",
         "channels": 2,
@@ -106,23 +111,37 @@ class Config:
                 return temp_value
         return value
 
-    def save(self) -> None:
-        """Save current configuration to file."""
-        # Create a copy of config without sensitive data
+    def save(self, include_api_keys: bool = False) -> None:
+        """Save current configuration to file.
+        
+        Args:
+            include_api_keys (bool): If True, API keys will be saved to the config file.
+                                   Use with caution as this saves sensitive data.
+        """
+        # Create a copy of config
         safe_config = self._config.copy()
-        if "api" in safe_config:
-            del safe_config["api"]  # Never save API keys to file
+        
+        # Only remove API keys if we're not explicitly including them
+        if not include_api_keys and "api" in safe_config:
+            del safe_config["api"]  # Never save API keys to file unless explicitly requested
+            
         save_config(safe_config)
 
     def get_api_key(self, service: str) -> Optional[str]:
-        """Get API key for the specified service from environment variables.
+        """Get API key for the specified service.
+        First checks config file, then falls back to environment variables.
 
         Args:
             service (str): Service name (openai, anthropic, groq)
 
         Returns:
-            Optional[str]: API key if found in environment variables, None otherwise
+            Optional[str]: API key if found, None otherwise
         """
+        # First try to get from config
+        if api_key := self._config.get("api", {}).get(service):
+            return api_key
+            
+        # Fall back to environment variables
         env_var_map = {
             "openai": "OPENAI_API_KEY",
             "anthropic": "ANTHROPIC_API_KEY",
@@ -132,6 +151,18 @@ class Config:
         if env_var := env_var_map.get(service):
             return os.getenv(env_var)
         return None
+
+    def set_api_key(self, service: str, key: str) -> None:
+        """Set API key for the specified service.
+
+        Args:
+            service (str): Service name (openai, anthropic, groq)
+            key (str): API key value
+        """
+        if "api" not in self._config:
+            self._config["api"] = {}
+        self._config["api"][service] = key
+        self.save()
 
     @property
     def api(self):

@@ -20,6 +20,8 @@ from ..core.config import config, DEFAULT_CONFIG
 from ..audio.audio import AudioRecorder, convert_to_wav
 from ..utils.logger import log
 from ..utils.utils import get_models_dir, get_app_dir
+import platform
+import ssl
 
 console = Console()
 
@@ -45,6 +47,10 @@ def check_ffmpeg():
 
 
 def install_whisper_model(model_name, whisperfile_path):
+    import ssl
+    import certifi
+    from urllib.request import urlopen
+
     full_model_name = f"whisper-{model_name}.llamafile"
     url = f"{WHISPER_BASE_URL}{full_model_name}"
     output_path = os.path.join(whisperfile_path, full_model_name)
@@ -59,42 +65,64 @@ def install_whisper_model(model_name, whisperfile_path):
     progress = console.status("[bold green]Downloading...", spinner="dots")
     progress.start()
 
+    def download_with_progress(response, output_path):
+        # Get file size for progress tracking
+        file_size = int(response.headers.get('content-length', 0))
+        downloaded = 0
+        
+        # Read the content in chunks and write to file
+        with open(output_path, 'wb') as f:
+            while True:
+                chunk = response.read(8192)
+                if not chunk:
+                    break
+                downloaded += len(chunk)
+                f.write(chunk)
+                
+                # Update progress message with percentage
+                if file_size:
+                    percent = (downloaded / file_size) * 100
+                    progress.update(f"[bold green]Downloading... {percent:.1f}%")
+
     try:
-        # Special handling for macOS SSL certificates
-        import platform
+        # First try with SSL verification
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        
+        # On macOS, also try to use system certificates
         if platform.system() == 'Darwin':
-            import ssl
-            import certifi
-            ssl_context = ssl.create_default_context(cafile=certifi.where())
-            # Try to find the macOS certificates as well
             try:
-                import subprocess
-                cert_file = subprocess.check_output(['python3', '-m', 'certifi']).decode('utf-8').strip()
-                os.environ['SSL_CERT_FILE'] = cert_file
-                os.environ['REQUESTS_CA_BUNDLE'] = cert_file
+                ssl_context.load_verify_locations(cafile='/etc/ssl/cert.pem')
             except Exception as e:
-                log.debug(f"Could not set macOS certificates: {e}")
-        else:
-            ssl_context = ssl.create_default_context()
+                log.debug(f"Could not load macOS system certificates: {e}")
 
         # Use urllib.request with the SSL context
-        from urllib.request import urlopen
         with urlopen(url, context=ssl_context) as response:
-            # Read the content in chunks and write to file
-            with open(output_path, 'wb') as f:
-                while True:
-                    chunk = response.read(8192)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-        
+            download_with_progress(response, output_path)
+            
         progress.stop()
         os.chmod(output_path, 0o755)
         log.success(f"{full_model_name} installed successfully.")
+        
     except Exception as e:
-        progress.stop()
-        log.error(f"Error downloading model: {str(e)}")
-        raise
+        log.warning(f"Secure download failed: {str(e)}")
+        log.warning("Attempting download without SSL verification...")
+        
+        try:
+            # Create an unverified context
+            ssl_context = ssl._create_unverified_context()
+            
+            with urlopen(url, context=ssl_context) as response:
+                download_with_progress(response, output_path)
+                
+            progress.stop()
+            os.chmod(output_path, 0o755)
+            log.success(f"{full_model_name} installed successfully (without SSL verification).")
+            log.warning("Note: Download was completed without SSL verification. This is less secure.")
+            
+        except Exception as e:
+            progress.stop()
+            log.error(f"Error downloading model: {str(e)}")
+            raise
 
 
 def get_whisper_model_path(model_name, whisperfile_path, verbose):

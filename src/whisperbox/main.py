@@ -4,6 +4,7 @@ import logging
 import argparse
 from threading import Thread
 from .core.config import config
+from .core.migration import MigrationManager
 from .audio.recording_manager import RecordingManager
 from .utils.logger import log
 from .core.setup import setup
@@ -97,7 +98,6 @@ def cli_mode(ai_provider=None, debug=False, profile=None):
         # If no profile specified at all, try to use default from config
         elif not profile and config.output.default_profile:
             profile = config.output.default_profile
-            log.info(f"Using default profile: {profile}")
             try:
                 profile_data = load_profile_yaml(profile) or {}
             except Exception as e:
@@ -121,7 +121,7 @@ def cli_mode(ai_provider=None, debug=False, profile=None):
         # Display profile information if we have it
         if profile and profile_data:
             name = profile_data.get('name') or profile
-            log.info(f"\nProfile loaded: {name}")
+            log.info(f"\nUsing profile: {name}")
             if description := profile_data.get('description'):
                 log.info(f"Description: {description}")
 
@@ -186,8 +186,6 @@ def cli_mode(ai_provider=None, debug=False, profile=None):
             log.debug(traceback.format_exc())
 
 
-
-
 def main():
     """Main entry point for the application."""
     args = None  # Initialize args outside try block
@@ -237,7 +235,6 @@ For more information, visit: https://github.com/ToolUse/whisperbox
             help="Open the WhisperBox data folder in Documents",
         )
 
-
         # Recording and Processing group
         processing_group = parser.add_argument_group('Recording and Processing')
         processing_group.add_argument(
@@ -264,17 +261,45 @@ For more information, visit: https://github.com/ToolUse/whisperbox
 
         args = parser.parse_args()
 
-        # Initialize logging
-        log.debug_mode = args.debug or config.system.debug_mode
+        # Initialize logging - enable debug mode for both loggers
+        debug_enabled = args.debug or config.system.debug_mode
+        log.debug_mode = True  # Enable debug mode for custom logger during startup
         logging.basicConfig(
-            level=logging.INFO if not config.system.debug_mode else logging.DEBUG
+            level=logging.DEBUG if debug_enabled else logging.INFO,
+            format='%(levelname)s: %(message)s'
         )
+        logger = logging.getLogger(__name__)
+        logger.setLevel(logging.DEBUG if debug_enabled else logging.INFO)
+        
+        log.debug("Starting WhisperBox...")
 
-        # Handle special commands first
+        # Check if this is first run or setup is explicitly requested
         if args.setup or is_first_run():
+            log.info("Running initial setup...")
             setup()
+            log.success("Setup completed! Please run WhisperBox again to start using it.")
             return
 
+        # Only check for migrations if this isn't the first run
+        if not is_first_run():
+            log.info("Checking for migrations...")
+            migration_manager = MigrationManager()
+            logger.debug("Migration manager created")
+            migration_results = migration_manager.check_and_migrate()
+            logger.debug(f"Migration results: {migration_results}")
+            
+            # Reset debug mode to user preference after migration
+            log.debug_mode = debug_enabled
+            
+            if migration_results["migrations_performed"]:
+                log.info("Configuration updates applied:")
+                for migration in migration_results["migrations_performed"]:
+                    log.info(f"- {migration}")
+                if migration_results["needs_restart"]:
+                    log.warning("Some changes require a restart to take effect.")
+                    return
+
+        # Handle special commands
         if args.devices:
             list_audio_devices()
             return
@@ -283,6 +308,7 @@ For more information, visit: https://github.com/ToolUse/whisperbox
             reveal_in_file_manager(get_app_dir())
             return
 
+        # Run the main CLI mode
         cli_mode(
             ai_provider=args.ai_provider,
             debug=args.debug,
@@ -295,7 +321,6 @@ For more information, visit: https://github.com/ToolUse/whisperbox
         log.error(f"An error occurred: {str(e)}")
         if args and args.debug:  # Check if args exists and debug is True
             log.debug(traceback.format_exc())
-
 
 
 if __name__ == "__main__":
