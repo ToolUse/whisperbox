@@ -1,6 +1,6 @@
 import os
 from typing import Dict, Any
-from ..utils.utils import create_app_directory_structure, get_config_path, save_config
+from ..utils.utils import create_app_directory_structure, get_config_path, save_config, load_config
 from ..core.config import DEFAULT_CONFIG, Config
 from ..utils.logger import log
 
@@ -12,52 +12,37 @@ class MigrationManager:
         self._config = Config()
 
     def check_and_migrate(self) -> Dict[str, Any]:
-        """Check for and perform any necessary migrations."""
-        log.debug("🔍 Starting migration checks...")
-        
-        # First ensure app directory exists
-        try:
-            create_app_directory_structure()
-        except Exception as e:
-            log.error(f"Failed to create app directory structure: {e}")
-            return {"migrations_performed": [], "needs_restart": False}
-
-        # Check if config exists, if not create it
-        config_path = get_config_path()
-        if not os.path.exists(config_path):
-            try:
-                # Start with default config
-                initial_config = DEFAULT_CONFIG.copy()
-                save_config(initial_config)
-                log.debug("Created initial config file")
-            except Exception as e:
-                log.error(f"Failed to create initial config: {e}")
-                return {"migrations_performed": [], "needs_restart": False}
-
-        migrations_performed = []
-        needs_restart = False
-
-        # Check for API configuration structure
-        log.debug("🔍 Checking API configuration structure...")
-        if self._migrate_api_config():
-            migrations_performed.append("Added API configuration structure")
-
-        # Check for Whisper cloud settings
-        log.debug("🔍 Checking Whisper cloud settings...")
-        if self._migrate_whisper_config():
-            migrations_performed.append("Added Whisper cloud fallback settings")
-
-        if migrations_performed:
-            try:
-                log.debug("🔍 Saving updated config")
-                self._config.save()
-            except Exception as e:
-                log.error(f"Failed to save config: {e}")
-        
-        return {
-            "migrations_performed": migrations_performed,
-            "needs_restart": needs_restart
+        """Check if migrations are needed and apply them."""
+        results = {
+            "migrations_performed": [],
+            "needs_restart": False
         }
+        
+        try:
+            # Load current config
+            config = load_config()
+            
+            # Add API configuration if missing
+            if "api" not in config:
+                config["api"] = {
+                    "openai": None,
+                    "anthropic": None,
+                    "groq": None
+                }
+                results["migrations_performed"].append("Added API configuration structure")
+                # Save with API structure preserved
+                save_config(config, include_api_keys=True)
+                
+            # Save final migrated config
+            if results["migrations_performed"]:
+                log.debug("Saving migrated config...")
+                save_config(config, include_api_keys=True)
+                
+            return results
+            
+        except Exception as e:
+            log.error(f"Error during migration: {e}")
+            return results
 
     def _migrate_whisper_config(self) -> bool:
         """Migrate Whisper configuration to include cloud fallback settings.

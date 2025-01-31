@@ -65,10 +65,18 @@ def create_app_directory_structure() -> None:
     get_profiles_dir().mkdir(exist_ok=True)
 
 
-def save_config(config: Dict[str, Any]) -> None:
-    """Save configuration to the config file."""
-    with open(get_config_path(), "w") as f:
-        yaml.dump(config, f, default_flow_style=False)
+def save_config(config: Dict[str, Any], include_api_keys: bool = False) -> None:
+    """Save configuration to YAML file."""
+    config_path = get_config_path()
+    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+    
+    # Create a copy to avoid modifying the original
+    safe_config = config.copy()
+    
+    # Add debug logging right before writing
+    
+    with open(config_path, 'w') as f:
+        yaml.safe_dump(safe_config, f, default_flow_style=False)
 
 
 def load_config() -> Dict[str, Any]:
