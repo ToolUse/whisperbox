@@ -67,6 +67,10 @@ class Config:
         """Initialize configuration from YAML file."""
         self._config_path = get_config_path()
         self._config = self._load_config()
+        
+        # Don't overwrite existing API structure
+        if "api" not in self._config:
+            self._config["api"] = DEFAULT_CONFIG["api"].copy()
 
     def _load_config(self):
         """Load configuration from file or create default."""
@@ -114,33 +118,18 @@ class Config:
         return value
 
     def save(self, include_api_keys: bool = False) -> None:
-        """Save current configuration to file.
-        
-        Args:
-            include_api_keys (bool): If True, API keys will be saved to the config file.
-                                   Use with caution as this saves sensitive data.
-        """
+        """Save current configuration to file."""
         # Create a copy of config
         safe_config = self._config.copy()
         
-        # Only remove API keys if we're not explicitly including them
-        if not include_api_keys and "api" in safe_config:
-            del safe_config["api"]  # Never save API keys to file unless explicitly requested
-            
-        save_config(safe_config)
+        
+        save_config(safe_config, include_api_keys=include_api_keys)
 
     def get_api_key(self, service: str) -> Optional[str]:
-        """Get API key for the specified service.
-        First checks config file, then falls back to environment variables.
-
-        Args:
-            service (str): Service name (openai, anthropic, groq)
-
-        Returns:
-            Optional[str]: API key if found, None otherwise
-        """
+        """Get API key for the specified service."""
         # First try to get from config
-        if api_key := self._config.get("api", {}).get(service):
+        api_key = self._config.get("api", {}).get(service)
+        if api_key:
             return api_key
             
         # Fall back to environment variables
@@ -155,16 +144,13 @@ class Config:
         return None
 
     def set_api_key(self, service: str, key: str) -> None:
-        """Set API key for the specified service.
-
-        Args:
-            service (str): Service name (openai, anthropic, groq)
-            key (str): API key value
-        """
+        """Set API key for the specified service."""
+        
         if "api" not in self._config:
             self._config["api"] = {}
         self._config["api"][service] = key
-        self.save()
+        
+        # Don't save here - let the setup process handle saving
 
     @property
     def api(self):
