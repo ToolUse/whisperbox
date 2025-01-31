@@ -188,102 +188,107 @@ def transcribe_audio(model_name, whisperfile_path, audio_file, verbose):
             
         log.debug(f"Final model name for transcription: {model_name}")
         
-        # First try local transcription
-        try:
-            # Check if file exists and is readable first
-            if not os.path.exists(audio_file):
-                log.error(f"Audio file not found: {audio_file}")
-                return None
+        # First try local transcription with retries
+        max_retries = 3  # Number of retries for local transcription
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                # Check if file exists and is readable first
+                if not os.path.exists(audio_file):
+                    log.error(f"Audio file not found: {audio_file}")
+                    return None
 
-            model_path = get_whisper_model_path(model_name, whisperfile_path, verbose)
-            if not model_path:
-                log.warning("Could not get Whisper model path, trying cloud fallback...")
-                raise Exception("No valid model path")
+                model_path = get_whisper_model_path(model_name, whisperfile_path, verbose)
+                if not model_path:
+                    log.warning("Could not get Whisper model path, trying cloud fallback...")
+                    raise Exception("No valid model path")
 
-            gpu_flag = "--gpu auto" if config.transcription.whisper.gpu_enabled else ""
-            command = f"{model_path} -f {audio_file} {gpu_flag}"
+                gpu_flag = "--gpu auto" if config.transcription.whisper.gpu_enabled else ""
+                command = f"{model_path} -f {audio_file} {gpu_flag}"
 
-            if verbose:
-                log.debug(f"Attempting to run command: {command}")
+                if verbose:
+                    log.debug(f"Attempt {attempt + 1}/{max_retries}: Running command: {command}")
 
-            log.debug("Running transcription command...")
+                process = subprocess.Popen(
+                    command,
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
 
-            process = subprocess.Popen(
-                command,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
+                stdout, stderr = process.communicate()
 
-            stdout, stderr = process.communicate()
+                if process.returncode != 0:
+                    raise Exception(f"Command failed with return code {process.returncode}: {stderr}")
 
-            if process.returncode != 0:
-                log.error(f"Command failed with return code {process.returncode}")
-                log.error(f"Error output: {stderr}")
-                raise Exception("Local transcription failed")
+                if not stdout.strip():
+                    raise Exception("Empty output")
 
-            if not stdout.strip():
-                log.warning("Local transcription produced empty output")
-                raise Exception("Empty output")
+                log.debug("Local transcription successful")
+                return stdout.strip()
 
-            log.debug("Local transcription output:")
-            log.debug(stdout)
+            except Exception as e:
+                last_error = e
+                log.warning(f"Local transcription attempt {attempt + 1} failed: {str(e)}")
+                if attempt < max_retries - 1:
+                    log.info(f"Retrying local transcription ({attempt + 2}/{max_retries})...")
+                    time.sleep(1)  # Short delay between retries
+                continue
 
-            return stdout.strip()
-
-        except Exception as local_error:
-            log.warning(f"Local transcription failed: {str(local_error)}")
+        # If all local attempts failed, try cloud fallback
+        log.warning(f"All local transcription attempts failed: {str(last_error)}")
+        
+        # Check if cloud fallback is enabled
+        if config.transcription.whisper.use_cloud_fallback:
+            log.info("Local transcription failed, trying cloud Whisper API...")
             
-            # Check if cloud fallback is enabled
-            if config.transcription.whisper.use_cloud_fallback:
-                log.info("Local transcription failed, trying cloud Whisper API...")
+            # Ask user if they want to try cloud transcription
+            if input("Try again with cloud Whisper? (y/n): ").lower() == 'y':
+                # Get OpenAI API key
+                api_key = config.get_api_key("openai")
                 
-                # Ask user if they want to try cloud transcription
-                if input("Try again with cloud Whisper? (y/n): ").lower() == 'y':
-                    # Get OpenAI API key
-                    api_key = config.get_api_key("openai")
-                    
-                    # If no API key, prompt for it
-                    if not api_key:
-                        log.warning("OpenAI API key not found in config")
-                        api_key = input("Enter your OpenAI API key: ").strip()
-                        if api_key:
-                            # Save the API key to config
-                            config.set_api_key("openai", api_key)
-                            log.success("API key saved to config")
-                        else:
-                            log.error("No API key provided")
-                            return None
-                    
-                    try:
-                        from openai import OpenAI
-                        client = OpenAI(api_key=api_key)
-                        
-                        log.info("Uploading audio to OpenAI Whisper API...")
-                        with open(audio_file, "rb") as audio:
-                            response = client.audio.transcriptions.create(
-                                model=config.transcription.whisper.cloud_model,
-                                file=audio,
-                                response_format="text"
-                            )
-                        
-                        if not response:
-                            log.error("Cloud transcription returned empty response")
-                            return None
-                            
-                        log.success("Cloud transcription successful!")
-                        return str(response)
-                        
-                    except Exception as cloud_error:
-                        log.error(f"Cloud transcription failed: {str(cloud_error)}")
+                # If no API key, prompt for it
+                if not api_key:
+                    log.warning("OpenAI API key not found in config")
+                    api_key = input("Enter your OpenAI API key: ").strip()
+                    if api_key:
+                        # Save the API key to config
+                        config.set_api_key("openai", api_key)
+                        log.success("API key saved to config")
+                    else:
+                        log.error("No API key provided")
                         return None
-                else:
-                    log.warning("Cloud transcription declined by user")
+                
+                try:
+                    from openai import OpenAI
+                    client = OpenAI(api_key=api_key)
+                    
+                    log.info("Uploading audio to OpenAI Whisper API...")
+                    with open(audio_file, "rb") as audio:
+                        response = client.audio.transcriptions.create(
+                            model=config.transcription.whisper.cloud_model,
+                            file=audio,
+                            response_format="text"
+                        )
+                    
+                    if not response:
+                        log.error("Cloud transcription returned empty response")
+                        return None
+                        
+                    log.success("Cloud transcription successful!")
+                    return str(response)
+                    
+                except Exception as cloud_error:
+                    log.error(f"Cloud transcription failed: {str(cloud_error)}")
                     return None
             else:
-                log.warning("Cloud fallback is disabled")
+                log.warning("Cloud transcription declined by user")
                 return None
+        else:
+            log.warning("Cloud fallback is disabled")
+            return None
 
     except Exception as e:
         log.error(f"Error in transcribe_audio: {str(e)}")
