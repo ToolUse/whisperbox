@@ -9,6 +9,7 @@ class MigrationManager:
     
     def __init__(self):
         log.debug("🔍 MigrationManager initialized")
+        self._config = Config()
 
     def check_and_migrate(self) -> Dict[str, Any]:
         """Check for and perform any necessary migrations."""
@@ -36,44 +37,67 @@ class MigrationManager:
         migrations_performed = []
         needs_restart = False
 
-        # Now proceed with migrations
-        log.debug("🔍 Checking API configuration...")
-        
-        # Check for API keys in environment variables
-        api_keys = {
-            'openai': 'OPENAI_API_KEY',
-            'anthropic': 'ANTHROPIC_API_KEY',
-            'groq': 'GROQ_API_KEY'
-        }
-        
-        # Create config instance after ensuring file exists
-        config = Config()
-        
-        for provider, env_var in api_keys.items():
-            api_key = os.environ.get(env_var)
-            log.debug(f"🔍 Checking {provider} API key... (exists in env: {api_key is not None})")
-            
-            if api_key:
-                try:
-                    log.debug(f"🔍 Migrating {provider} API key from environment")
-                    config.set_api_key(provider, api_key)
-                    migrations_performed.append(f"Migrated {provider} API key from environment variable")
-                except Exception as e:
-                    log.error(f"Failed to migrate {provider} API key: {e}")
+        # Check for API configuration structure
+        log.debug("🔍 Checking API configuration structure...")
+        if self._migrate_api_config():
+            migrations_performed.append("Added API configuration structure")
+
+        # Check for Whisper cloud settings
+        log.debug("🔍 Checking Whisper cloud settings...")
+        if self._migrate_whisper_config():
+            migrations_performed.append("Added Whisper cloud fallback settings")
 
         if migrations_performed:
             try:
-                log.debug("🔍 Saving updated config with API keys")
-                config.save(include_api_keys=True)
+                log.debug("🔍 Saving updated config")
+                self._config.save()
             except Exception as e:
                 log.error(f"Failed to save config: {e}")
         
         return {
             "migrations_performed": migrations_performed,
             "needs_restart": needs_restart
-        }     
+        }
+
+    def _migrate_whisper_config(self) -> bool:
+        """Migrate Whisper configuration to include cloud fallback settings.
+        
+        Returns:
+            bool: True if migration was performed, False otherwise
+        """
+        needs_save = False
+        
+        # Check if transcription section exists
+        if "transcription" not in self._config.config:
+            log.debug("Transcription section missing from config, adding it")
+            self._config.config["transcription"] = DEFAULT_CONFIG["transcription"].copy()
+            needs_save = True
+            return needs_save
+
+        # Check if whisper section exists
+        if "whisper" not in self._config.config["transcription"]:
+            log.debug("Whisper section missing from config, adding it")
+            self._config.config["transcription"]["whisper"] = DEFAULT_CONFIG["transcription"]["whisper"].copy()
+            needs_save = True
+            return needs_save
+
+        # Check for new cloud settings
+        whisper_config = self._config.config["transcription"]["whisper"]
+        if "use_cloud_fallback" not in whisper_config:
+            log.debug("Adding Whisper cloud fallback setting")
+            whisper_config["use_cloud_fallback"] = DEFAULT_CONFIG["transcription"]["whisper"]["use_cloud_fallback"]
+            needs_save = True
+
+        if "cloud_model" not in whisper_config:
+            log.debug("Adding Whisper cloud model setting")
+            whisper_config["cloud_model"] = DEFAULT_CONFIG["transcription"]["whisper"]["cloud_model"]
+            needs_save = True
+            
+        return needs_save
+
     def _migrate_api_config(self) -> bool:
-        """Migrate API configuration from environment variables to config file.
+        """Ensure API configuration structure exists with null values.
+        Does not copy environment variables to config.
         
         Returns:
             bool: True if migration was performed, False otherwise
@@ -82,22 +106,20 @@ class MigrationManager:
         
         # Check if api section exists, if not add it
         if "api" not in self._config.config:
-            log.debug("API section missing from config, adding it")
-            self._config.config["api"] = DEFAULT_CONFIG["api"].copy()
+            log.debug("API section missing from config, adding it with null values")
+            self._config.config["api"] = {
+                "openai": None,
+                "anthropic": None,
+                "groq": None
+            }
             needs_save = True
+            return needs_save
             
-        # Migrate any existing API keys from env vars if they exist
+        # Ensure all expected API fields exist with null values if not present
         for service in ["openai", "anthropic", "groq"]:
-            env_key = f"{service.upper()}_API_KEY"
-            env_value = os.getenv(env_key)
-            log.debug(f"Checking {service} API key... (exists in env: {env_value is not None})")
-            if env_value and not self._config.config["api"].get(service):
-                log.debug(f"Migrating {service} API key from environment")
-                self._config.config["api"][service] = env_value
+            if service not in self._config.config["api"]:
+                log.debug(f"Adding null {service} API key field to config")
+                self._config.config["api"][service] = None
                 needs_save = True
-        
-        if needs_save:
-            log.debug("Saving updated config with API keys")
-            self._config.save(include_api_keys=True)
-            
+                
         return needs_save 

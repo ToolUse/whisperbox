@@ -51,6 +51,8 @@ DEFAULT_CONFIG = {
             "models_path": str(get_models_dir()),
             "base_url": "https://huggingface.co/Mozilla/whisperfile/resolve/main/",
             "gpu_enabled": True,
+            "use_cloud_fallback": True,
+            "cloud_model": "whisper-1",
         }
     },
     "system": {
