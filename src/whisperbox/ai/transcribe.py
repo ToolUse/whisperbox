@@ -5,6 +5,7 @@ import os
 import time
 import pyaudio
 import wave
+import traceback
 from pydub import AudioSegment
 from rich.console import Console
 from rich.layout import Layout
@@ -126,35 +127,54 @@ def install_whisper_model(model_name, whisperfile_path):
 
 
 def get_whisper_model_path(model_name, whisperfile_path, verbose):
-    full_model_name = f"whisper-{model_name}.llamafile"
-    # Expand user path if necessary
-    whisperfile_path = os.path.expanduser(whisperfile_path)
-    model_path = os.path.join(whisperfile_path, full_model_name)
+    """Get the path to the Whisper model, downloading if necessary.
+    
+    Returns:
+        str: Path to the model file if successful, None if failed
+    """
+    try:
+        full_model_name = f"whisper-{model_name}.llamafile"
+        # Expand user path if necessary
+        whisperfile_path = os.path.expanduser(whisperfile_path)
+        model_path = os.path.join(whisperfile_path, full_model_name)
 
-    log.debug(f"Looking for Whisper model at: {model_path}")
+        log.debug(f"Looking for Whisper model at: {model_path}")
 
-    if not os.path.exists(model_path):
-        log.warning(f"Whisper model {full_model_name} not found.")
-        log.warning(f"Would you like to download it from {WHISPER_BASE_URL}?")
+        if not os.path.exists(model_path):
+            log.warning(f"Whisper model {full_model_name} not found.")
+            log.warning(f"Would you like to download it from {WHISPER_BASE_URL}?")
 
-        if input("Download model? (y/n): ").lower() == "y":
-            install_whisper_model(model_name, whisperfile_path)
-        else:
-            raise FileNotFoundError(
-                f"Whisper model {full_model_name} not found and download was declined."
-            )
-    else:
+            if input("Download model? (y/n): ").lower() == "y":
+                try:
+                    install_whisper_model(model_name, whisperfile_path)
+                except Exception as e:
+                    log.error(f"Failed to download model: {str(e)}")
+                    return None
+            else:
+                log.warning("Model download declined by user")
+                return None
+
         log.debug(f"Found Whisper model at: {model_path}")
 
-    # Check if the file is executable
-    if not os.access(model_path, os.X_OK):
-        log.warning("Making model file executable...")
-        os.chmod(model_path, 0o755)
+        # Check if the file is executable
+        if not os.access(model_path, os.X_OK):
+            try:
+                log.warning("Making model file executable...")
+                os.chmod(model_path, 0o755)
+            except Exception as e:
+                log.error(f"Failed to make model executable: {str(e)}")
+                return None
 
-    return model_path
+        return model_path
+
+    except Exception as e:
+        log.error(f"Error in get_whisper_model_path: {str(e)}")
+        log.debug(traceback.format_exc())
+        return None
 
 
 def transcribe_audio(model_name, whisperfile_path, audio_file, verbose):
+    """Transcribe audio using local Whisper model with cloud fallback."""
     try:
         if not model_name:
             model_name = config.get_with_retry("transcription", "whisper", "model")
@@ -167,51 +187,108 @@ def transcribe_audio(model_name, whisperfile_path, audio_file, verbose):
             model_name = default_model
             
         log.debug(f"Final model name for transcription: {model_name}")
-        model_path = get_whisper_model_path(model_name, whisperfile_path, verbose)
-        gpu_flag = "--gpu auto" if config.transcription.whisper.gpu_enabled else ""
-        command = f"{model_path} -f {audio_file} {gpu_flag}"
+        
+        # First try local transcription
+        try:
+            # Check if file exists and is readable first
+            if not os.path.exists(audio_file):
+                log.error(f"Audio file not found: {audio_file}")
+                return None
 
-        if verbose:
-            log.debug(f"Attempting to run command: {command}")
+            model_path = get_whisper_model_path(model_name, whisperfile_path, verbose)
+            if not model_path:
+                log.warning("Could not get Whisper model path, trying cloud fallback...")
+                raise Exception("No valid model path")
 
-        # Check if file exists and is readable
-        if not os.path.exists(audio_file):
-            raise FileNotFoundError(f"Audio file not found: {audio_file}")
+            gpu_flag = "--gpu auto" if config.transcription.whisper.gpu_enabled else ""
+            command = f"{model_path} -f {audio_file} {gpu_flag}"
 
-        log.debug("Running transcription command...")
+            if verbose:
+                log.debug(f"Attempting to run command: {command}")
 
-        process = subprocess.Popen(
-            command,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+            log.debug("Running transcription command...")
 
-        stdout, stderr = process.communicate()
+            process = subprocess.Popen(
+                command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
 
-        if process.returncode != 0:
-            log.error(f"Command failed with return code {process.returncode}")
-            log.error(f"Error output: {stderr}")
+            stdout, stderr = process.communicate()
 
-            raise Exception(f"Transcription failed: {stderr}")
+            if process.returncode != 0:
+                log.error(f"Command failed with return code {process.returncode}")
+                log.error(f"Error output: {stderr}")
+                raise Exception("Local transcription failed")
 
-        if not stdout.strip():
-            log.warning("Warning: Transcription produced empty output")
-            return None
+            if not stdout.strip():
+                log.warning("Local transcription produced empty output")
+                raise Exception("Empty output")
 
-        log.debug("Transcription output:")
-        log.debug(stdout)
+            log.debug("Local transcription output:")
+            log.debug(stdout)
 
-        return stdout.strip()
+            return stdout.strip()
+
+        except Exception as local_error:
+            log.warning(f"Local transcription failed: {str(local_error)}")
+            
+            # Check if cloud fallback is enabled
+            if config.transcription.whisper.use_cloud_fallback:
+                log.info("Local transcription failed, trying cloud Whisper API...")
+                
+                # Ask user if they want to try cloud transcription
+                if input("Try again with cloud Whisper? (y/n): ").lower() == 'y':
+                    # Get OpenAI API key
+                    api_key = config.get_api_key("openai")
+                    
+                    # If no API key, prompt for it
+                    if not api_key:
+                        log.warning("OpenAI API key not found in config")
+                        api_key = input("Enter your OpenAI API key: ").strip()
+                        if api_key:
+                            # Save the API key to config
+                            config.set_api_key("openai", api_key)
+                            log.success("API key saved to config")
+                        else:
+                            log.error("No API key provided")
+                            return None
+                    
+                    try:
+                        from openai import OpenAI
+                        client = OpenAI(api_key=api_key)
+                        
+                        log.info("Uploading audio to OpenAI Whisper API...")
+                        with open(audio_file, "rb") as audio:
+                            response = client.audio.transcriptions.create(
+                                model=config.transcription.whisper.cloud_model,
+                                file=audio,
+                                response_format="text"
+                            )
+                        
+                        if not response:
+                            log.error("Cloud transcription returned empty response")
+                            return None
+                            
+                        log.success("Cloud transcription successful!")
+                        return str(response)
+                        
+                    except Exception as cloud_error:
+                        log.error(f"Cloud transcription failed: {str(cloud_error)}")
+                        return None
+                else:
+                    log.warning("Cloud transcription declined by user")
+                    return None
+            else:
+                log.warning("Cloud fallback is disabled")
+                return None
 
     except Exception as e:
         log.error(f"Error in transcribe_audio: {str(e)}")
-        import traceback
-
-        log.error(f"{traceback.format_exc()}")
-
-        raise
+        log.debug(traceback.format_exc())
+        return None
 
 
 def summarize(text):
