@@ -65,6 +65,27 @@ brew install portaudio
 pip install whisperbox
 ```
 
+## System Audio Capture Setup
+
+### macOS
+
+1. Install BlackHole: `brew install blackhole-2ch`
+2. Set up a Multi-Output Device in Audio MIDI Setup:
+   - Open Audio MIDI Setup (using Spotlight or from Applications/Utilities)
+   - Click the + in the bottom left and select "Create Multi-Output Device"
+   - Check both your regular output and BlackHole 2ch
+3. Select the new Multi-Output Device as your system output
+4. In WhisperBox, select BlackHole 2ch as your system audio input
+
+### Linux and Windows
+
+System audio capture requires additional setup that varies by distribution/version. When running `wb --devices`, WhisperBox will look for common system audio capture devices like:
+
+- Linux: PulseAudio monitors, JACK inputs, or audio loopback devices
+- Windows: Stereo Mix, VB-Cable, or other virtual audio devices
+
+Please check your system's documentation for setting up audio capture devices.
+
 ## Usage
 
 ### Setup
@@ -101,6 +122,14 @@ wb
 ```bash
 wb --profile monologue_to_keynote
 ```
+
+- Configure audio devices:
+
+```bash
+wb --devices
+```
+
+This will launch an interactive device selection menu where you can configure both your microphone input and system audio capture devices. Useful for setting up or changing your recording sources.
 
 - Specify a Whisper model:
 
