@@ -2,14 +2,6 @@
 
 A powerful command-line tool for transcribing and analyzing audio recordings with AI assistance. Record meetings, lectures, or any audio directly from your terminal and get instant transcriptions with summaries, sentiment analysis, and topic detection.
 
-Available in two versions:
-
-- Free: Command-line interface (CLI) version - Open source and MIT licensed
-- Paid: GUI version with native desktop interface - One-time $10 purchase to support development
-
-> The GUI version offers the same powerful features in a user-friendly interface, perfect for those who prefer not to use the terminal.
-> Purchase helps support ongoing development of free and open source AI tools.
-> [Purchase WhisperBox GUI version here](https://tooluse.gumroad.com/l/lqjyw)
 
 ## Features
 
@@ -292,7 +284,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Acknowledgments
 
-- [Whisper AI](https://github.com/openai/whisper) for the transcription models
+- [Whisper](https://github.com/openai/whisper) for the transcription models
 - [Rich](https://github.com/Textualize/rich) for the terminal UI
 - All the AI providers supported by this tool
 
