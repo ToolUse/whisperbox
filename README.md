@@ -36,7 +36,7 @@ A powerful command-line tool for transcribing and analyzing audio recordings wit
 brew install ffmpeg
 
 # On Ubuntu/Debian
-sudo apt-get install ffmpeg
+sudo apt-get install ffmpeg libgirepository-2.0-dev
 ```
 
 2. Install BlackHole for system audio capture (MacOS only)
